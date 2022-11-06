@@ -6,6 +6,7 @@
 
 ## 功能特性
 
+- [x] 流量限制: 通过指定环境变量MaxFlowSizeMB限制流量使用大小如 MaxFlowSizeMB=1 ./gost -L=:8001
 - [x] [多端口监听](https://gost.run/getting-started/quick-start/)
 - [x] [多级转发链](https://gost.run/concepts/chain/)
 - [x] 多协议支持

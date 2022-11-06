@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
@@ -16,6 +18,8 @@ import (
 	xlogger "github.com/go-gost/x/logger"
 	xmetrics "github.com/go-gost/x/metrics"
 	"github.com/go-gost/x/registry"
+	"github.com/prometheus/common/expfmt"
+	"go.uber.org/atomic"
 )
 
 var (
@@ -134,6 +138,77 @@ func main() {
 				defer s.Close()
 				log.Info("metrics service on ", s.Addr())
 				log.Fatal(s.Serve())
+			}()
+
+			go func() {
+				ticker := time.NewTicker(time.Second * 6)
+				var maxLimitBytes, preDayUsage float64
+				var currentFlowUsageBytes atomic.Float64
+				maxLimitMB := os.Getenv("MaxFlowSizeMB")
+				if maxLimitMB != "" {
+					if maxLimitMbUint, err := strconv.ParseInt(maxLimitMB, 10, 64); err != nil {
+						const defaultFlowLimitMB = 1024
+						maxLimitBytes = float64(defaultFlowLimitMB * 1024 * 1024)
+						log.Infof("err: %+v and set default flow limit %d\n", err, defaultFlowLimitMB)
+					} else {
+						maxLimitBytes = float64(maxLimitMbUint * 1024 * 1024)
+						log.Infof("set flow limit to %v MB\n", maxLimitMbUint)
+					}
+					go func() {
+						ticker := time.NewTicker(time.Second * 58)
+						for {
+							select {
+							case <-ticker.C:
+								timenow := time.Now()
+								if timenow.Hour() == 0 && timenow.Minute() == 0 {
+									log.Infof("reset flow limit(max %d)", maxLimitBytes)
+									preDayUsage = currentFlowUsageBytes.Load()
+									currentFlowUsageBytes.Store(0)
+								}
+							}
+						}
+					}()
+				}
+				for {
+					select {
+					case <-ticker.C:
+						resp, err := http.Get("http://127.0.0.1" + cfg.Metrics.Addr + "/metrics")
+						if err != nil {
+							log.Error(err)
+							continue
+						}
+						var parser expfmt.TextParser
+						mf, err := parser.TextToMetricFamilies(resp.Body)
+						if err != nil {
+							log.Error(err)
+							resp.Body.Close()
+							continue
+						}
+						resp.Body.Close()
+						var total float64
+						for k, v := range mf {
+							if k == string(xmetrics.MetricServiceTransferOutputBytesCounter) || k == string(xmetrics.MetricServiceTransferInputBytesCounter) {
+								ms := v.GetMetric()
+								for _, m := range ms {
+									// fmt.Printf("m.Counter.GetValue(): %+v\n", m.Counter.GetValue())
+									total += m.Counter.GetValue()
+								}
+
+								continue
+							}
+						}
+						preTotal := currentFlowUsageBytes.Load()
+						if preTotal != total {
+							todayUsage := (total - preDayUsage)
+							if todayUsage > maxLimitBytes {
+								log.Infof("over flow limit %v Bytes current usage %v Bytes exit now\n", maxLimitBytes, total)
+								os.Exit(1)
+							}
+							log.Infof("[usage] packaget:%f today: %f/%f %f", total-preTotal, todayUsage, maxLimitBytes, (todayUsage/maxLimitBytes)*100)
+							currentFlowUsageBytes.Store(total)
+						}
+					}
+				}
 			}()
 		}
 	}

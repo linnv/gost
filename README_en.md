@@ -4,6 +4,7 @@
 
 ## Features
 
+- [x] Flow usage limiation: By setting the env MaxFlowSizeMB to limit Bandwidth usage, e.g.  MaxFlowSizeMB=1 ./gost -L=:8001
 - [x] [Listening on multiple ports](https://gost.run/en/getting-started/quick-start/)
 - [x] [Multi-level forwarding chain](https://gost.run/en/concepts/chain/)
 - [x] Rich protocol
